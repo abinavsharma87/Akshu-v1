@@ -3,7 +3,7 @@ import os
 import random
 import re
 import time
-from typing import Union, List, Tuple, Optional
+from typing import Union, Tuple, Optional
 
 import yt_dlp
 from pyrogram.enums import MessageEntityType
@@ -32,7 +32,7 @@ class YouTubeAPI:
         self.request_delay = random.uniform(1.5, 3.0)
 
     def _get_ydl_opts(self, audio_only=True):
-        """Get optimized yt-dlp options"""
+        """Get optimized yt-dlp options with all braces properly closed"""
         return {
             'format': 'bestaudio/best' if audio_only else 'bestvideo[height<=720]+bestaudio/best[height<=720]',
             'quiet': True,
@@ -42,42 +42,42 @@ class YouTubeAPI:
             'force_ipv4': True,
             'socket_timeout': 30,
             'retries': 5,
-            'extractor_args': {'youtube': {'skip': ['dash', 'hls']},
+            'extractor_args': {'youtube': {'skip': ['dash', 'hls']}},
             'postprocessor_args': {'ffmpeg': ['-loglevel', 'quiet']},
             'outtmpl': 'downloads/%(id)s.%(ext)s',
             'user_agent': random.choice(self.user_agents),
+            'referer': 'https://www.youtube.com/',
+            'throttled_rate': '1M',
+            'sleep_interval_requests': random.randint(5, 10),
+            'sleep_interval': random.randint(1, 3),
+            'max_sleep_interval': 8
         }
 
-    async def url(self, message: Message) -> Union[str, None]:
-        """Extract URL from message"""
+    async def url(self, message: Message) -> Optional[str]:
+        """Extract URL from message with proper entity handling"""
         messages = [message]
         if message.reply_to_message:
             messages.append(message.reply_to_message)
         
-        for message in messages:
-            # Check text entities first
-            if message.entities:
-                for entity in message.entities:
+        for msg in messages:
+            # Check text entities
+            if msg.entities:
+                for entity in msg.entities:
                     if entity.type == MessageEntityType.URL:
-                        text = message.text or message.caption
-                        return text[entity.offset:entity.offset + entity.length]
+                        text = msg.text or msg.caption
+                        if text:
+                            return text[entity.offset:entity.offset + entity.length]
             
-            # Check caption entities if no URL found
-            if message.caption_entities:
-                for entity in message.caption_entities:
+            # Check caption entities
+            if msg.caption_entities:
+                for entity in msg.caption_entities:
                     if entity.type == MessageEntityType.TEXT_LINK:
                         return entity.url
         
         return None
 
-    async def exists(self, link: str, videoid: Union[bool, str] = None) -> bool:
-        """Check if link is a valid YouTube URL"""
-        if videoid:
-            link = self.base + link
-        return bool(re.search(self.regex, link))
-
     async def details(self, link: str, videoid: Union[bool, str] = None) -> Tuple[str, str, int, str, str]:
-        """Get video details with fallback"""
+        """Get video details with multiple fallback strategies"""
         try:
             if videoid:
                 link = self.base + link
@@ -94,8 +94,13 @@ class YouTubeAPI:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = await asyncio.to_thread(ydl.extract_info, link, download=False)
                 
+                if not info:
+                    raise Exception("No info returned from yt-dlp")
+                
                 if 'entries' in info:
-                    info = info['entries'][0]
+                    info = info['entries'][0] if info['entries'] else None
+                    if not info:
+                        raise Exception("No entries found in search results")
                 
                 title = info.get('title', 'Unknown Title')
                 duration_sec = info.get('duration', 0)
@@ -106,7 +111,7 @@ class YouTubeAPI:
                 return title, duration_min, duration_sec, thumbnail, vidid
                 
         except Exception as e:
-            print(f"YT-DLP failed, falling back to VideosSearch: {e}")
+            print(f"YT-DLP failed ({e}), falling back to VideosSearch")
             try:
                 clean_query = link.replace('ytsearch:', '') if link.startswith('ytsearch:') else link
                 results = VideosSearch(clean_query, limit=1)
@@ -123,27 +128,11 @@ class YouTubeAPI:
                 print(f"All methods failed: {e}")
                 return "Unknown Title", "0:00", 0, "", ""
 
-    async def download(
-        self,
-        link: str,
-        audio_only: bool = True,
-        format_id: str = None,
-        title: str = None
-    ) -> Union[str, Tuple[str, bool]]:
-        """Download audio or video"""
+    async def download(self, link: str, audio_only: bool = True) -> Tuple[Optional[str], bool]:
+        """Download audio or video with proper error handling"""
         try:
             await self._rate_limit()
             ydl_opts = self._get_ydl_opts(audio_only)
-            
-            if format_id and title:
-                ext = 'mp4' if format_id.startswith('bestvideo') else 'mp3'
-                ydl_opts['outtmpl'] = f'downloads/{title}.{ext}'
-                if ext == 'mp3':
-                    ydl_opts['postprocessors'] = [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192',
-                    }]
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = await asyncio.to_thread(ydl.extract_info, link, download=True)
@@ -158,5 +147,3 @@ class YouTubeAPI:
         except Exception as e:
             print(f"Download failed: {e}")
             return None, False
-
-    # [Keep other methods like playlist(), track(), etc. as needed]
