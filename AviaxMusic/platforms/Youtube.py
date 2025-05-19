@@ -4,7 +4,7 @@ import os
 import random
 import re
 import time
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Dict
 
 import yt_dlp
 from pyrogram.enums import MessageEntityType
@@ -58,32 +58,39 @@ class YouTubeAPI:
             'sleep_interval': random.randint(1, 3)
         }
 
-    async def _safe_extract(self, query: str, is_search: bool = False):
-        """Safely extract video info with retry logic"""
-        for attempt in range(3):
-            try:
-                await self._rate_limit()
-                ydl_opts = self._get_ydl_options()
-                
-                if is_search and not query.startswith(self.search_url):
-                    query = f"{self.search_url}{query}"
-                
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = await asyncio.to_thread(
-                        ydl.extract_info,
-                        query,
-                        download=False
-                    )
-                    if not info:
-                        raise ValueError("Empty response from YouTube")
-                    return info
-            except Exception as e:
-                logger.warning(f"Attempt {attempt + 1} failed: {str(e)}")
-                if attempt == 2:
-                    raise
-                await asyncio.sleep(1 + attempt)  # Progressive backoff
+    async def url(self, message: Message) -> Optional[str]:
+        """
+        Extract YouTube URL from a Pyrogram message
+        Supports both text URLs and TEXT_LINK entities
+        """
+        try:
+            # Check the main message
+            if message.entities:
+                for entity in message.entities:
+                    if entity.type == MessageEntityType.URL:
+                        text = message.text or message.caption
+                        if text:
+                            url = text[entity.offset:entity.offset + entity.length]
+                            if re.search(self.regex, url):
+                                return url
 
-    async def process_query(self, query: str) -> Tuple[Optional[dict], bool]:
+            # Check caption entities
+            if message.caption_entities:
+                for entity in message.caption_entities:
+                    if entity.type == MessageEntityType.TEXT_LINK:
+                        if re.search(self.regex, entity.url):
+                            return entity.url
+
+            # Check replied message if exists
+            if message.reply_to_message:
+                return await self.url(message.reply_to_message)
+
+            return None
+        except Exception as e:
+            logger.error(f"URL extraction failed: {str(e)}")
+            return None
+
+    async def process_query(self, query: str) -> Tuple[Optional[Dict], bool]:
         """
         Process a YouTube query or URL
         Returns (video_info, is_search)
@@ -117,6 +124,31 @@ class YouTubeAPI:
             except Exception as fallback_error:
                 logger.error(f"Fallback also failed: {str(fallback_error)}")
                 return None, False
+
+    async def _safe_extract(self, query: str, is_search: bool = False):
+        """Safely extract video info with retry logic"""
+        for attempt in range(3):
+            try:
+                await self._rate_limit()
+                ydl_opts = self._get_ydl_options()
+                
+                if is_search and not query.startswith(self.search_url):
+                    query = f"{self.search_url}{query}"
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = await asyncio.to_thread(
+                        ydl.extract_info,
+                        query,
+                        download=False
+                    )
+                    if not info:
+                        raise ValueError("Empty response from YouTube")
+                    return info
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} failed: {str(e)}")
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(1 + attempt)  # Progressive backoff
 
     async def get_download_url(self, video_id: str, audio_only=True) -> Optional[str]:
         """Get direct download URL for a video"""
