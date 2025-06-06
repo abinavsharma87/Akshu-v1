@@ -1,17 +1,17 @@
 import asyncio
-import logging
 import os
-import random
 import re
-import time
-from typing import Optional, Tuple, Union, Dict
+import json
+from typing import Union
+from urllib.parse import urlparse, parse_qs
 
-import yt_dlp
+import httpx
 from pyrogram.enums import MessageEntityType
 from pyrogram.types import Message
 from youtubesearchpython.__future__ import VideosSearch
 
-logger = logging.getLogger(__name__)
+from AviaxMusic.utils.formatters import time_to_seconds
+
 # ============== CONFIGURE YOUR API ==============
 YOUR_API_URL = "http://128.0.118.34:8000"
 YOUR_API_KEY = "ishq_mein"            # <--- Change me!
